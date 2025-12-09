@@ -6,6 +6,8 @@ process PLOT_REPORT {
     input:
     path classifiedTsv
     val mutationType
+    path chromBed
+    path cytoBand
     
     output:
     path "distributions.png", emit: distributionPlot
