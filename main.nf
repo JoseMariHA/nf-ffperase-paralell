@@ -63,6 +63,7 @@ def showHelp() {
             classify            Classify variants as real or FFPE artifacts.
 
         Preprocess Options:
+            --samplesheet      TSV with columns: sample_id,vcf,bam,coverage,medianInsert.
             --vcf               SNV/indel mutations VCF file [required].
             --bam               Input FFPE bam file [required].
             --reference         Reference fasta used to align the FFPE bam [required].
@@ -346,35 +347,74 @@ workflow trainWorkflow {
         modelPath,
     )
 }
-
+Channel
+    .fromPath(params.samplesheet)
+    .ifEmpty {
+        logError "Error: --samplesheet is required for multi-sample runs."
+        System.exit(1)
+    }
+    .splitCsv(header: true, sep: '\t')
+    .map { row ->
+        tuple(
+            row.sample_id,
+            file(row.vcf),
+            file(row.bam),
+            row.coverage as Integer,
+            row.medianInsert as Integer
+        )
+    }
+    .set { samples_ch }
 workflow {
-    if (params.help) { showHelp() }
+
+    if (params.help)    { showHelp() }
     if (params.version) { showVersion() }
 
     validateSteps()
     showInfo()
-    
-    def featuresTsv
-    def inputs = validateInputs()
 
-    if (params.step == "preprocess") {
-        featuresTsv = preprocessWorkflow()
-    }
+    // For each sample in the sheet, run full FFPErase
+    samples_ch
+        .map { sample_id, vcf_file, bam_file, cov, ins ->
 
-    if (params.step == "classify") {
-        featuresTsv = inputs.features
-        classifyWorkflow(featuresTsv)
-    }
+            // Override per-sample params
+            params.vcf          = vcf_file
+            params.bam          = bam_file
+            params.coverage     = cov
+            params.medianInsert = ins
 
-    if (params.step == "train") {
-        featuresTsv = inputs.features
-        trainWorkflow(featuresTsv)
-    }
+            // Make sample-specific outdir
+            def sample_out = "${params.outdir}/${sample_id}"
+            params.outdir       = sample_out
+            params.outdirPreprocess = "${sample_out}/preprocess"
+            params.outdirClassify   = "${sample_out}/classify"
 
-    if (params.step == "full") {
-        featuresTsv = preprocessWorkflow()
-        classifyWorkflow(featuresTsv)
-    }
+            // Re-validate for this sample
+            def inputs = validateInputs()
+
+            def featuresTsv
+
+            if (params.step == "preprocess") {
+                featuresTsv = preprocessWorkflow()
+            }
+
+            if (params.step == "classify") {
+                featuresTsv = inputs.features
+                classifyWorkflow(featuresTsv)
+            }
+
+            if (params.step == "train") {
+                featuresTsv = inputs.features
+                trainWorkflow(featuresTsv)
+            }
+
+            if (params.step == "full") {
+                featuresTsv = preprocessWorkflow()
+                classifyWorkflow(featuresTsv)
+            }
+
+            return [sample_id, sample_out]
+        }
+        .view { sid, outdir -> "Finished sample ${sid} -> ${outdir}" }
 }
 
 workflow.onComplete {
