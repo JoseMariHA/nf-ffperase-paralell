@@ -1,3 +1,4 @@
+params.samplesheet = "${projectDir}/assets/NO_FILE"
 include { logSuccess
     logWarning
     logError
